@@ -2,6 +2,38 @@ import os
 import torch
 from torch.utils.data import Dataset
 import scipy.io as sio
+import numpy as np
+
+
+class ArtDataset(Dataset):
+    def __init__(self, feature=None, freq_band='all'):
+        """Initialize dataset.
+
+        Args:
+            feature (str): None, 'psd', 'de'
+            freq_band (str): 'all', 'delta', 'theta', 'alpha', 'beta', 'gamma'
+        """
+        super().__init__()
+        bands = ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']
+        if feature == None:
+            data_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_data.npy"
+            freq_in_use = bands.index(freq_band)
+            self.data = np.load(data_path)[freq_in_use]
+        elif feature == 'psd':
+            data_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_data_psd.npy"
+            self.data = np.load(data_path)
+        elif feature == 'de':
+            data_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_data_de.npy"
+            self.data = np.load(data_path)
+        
+        label_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_label.npy"
+        self.label = np.load(label_path)
+    
+    def __len__(self):
+        return self.data.shape[0]
+    
+    def __getitem__(self, index):
+        return self.data[index], self.label[index]
 
 
 class SEED_IV(Dataset):

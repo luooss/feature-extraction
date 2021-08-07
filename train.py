@@ -36,7 +36,7 @@ parser.add_argument('--datapath',
                     type=str)
 parser.add_argument('--maxepochs',
                     help='Maximum training epochs',
-                    default=500,
+                    default=1000,
                     type=int)
 parser.add_argument('--lr',
                     help='Learning rate',
