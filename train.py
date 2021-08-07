@@ -1,6 +1,8 @@
 import os
 import argparse
 import time
+import random
+from numpy.lib.function_base import average
 
 from tqdm import tqdm
 
@@ -17,7 +19,7 @@ import torch.optim as opt
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, plot_confusion_matrix, f1_score
 
 import matplotlib.pyplot as plt
 
@@ -69,94 +71,47 @@ parser.add_argument('--num_layers',
 args = parser.parse_args()
 
 
-class SVMTrainApp:
-    def __init__(self):
-        self.dpath = args.datapath
-    
-    def getDataset(self, feature, smooth_method, frq_bands, target_subject):
-        train_dset = SEED_IV(self.dpath, feature, smooth_method, frq_bands, [i for i in range(1, 16) if i != target_subject])
-        test_dset = SEED_IV(self.dpath, feature, smooth_method, frq_bands, [target_subject])
-        return train_dset.data.numpy(), train_dset.emotion_label.numpy(), test_dset.data.numpy(), test_dset.emotion_label.numpy()
+class BaselinesTrainApp:
+    def __init__(self, dset_train, dset_test):
+        self.x_train = dset_train.data.numpy().reshape((800, -1))
+        self.y_train = dset_train.label.numpy()
+
+        self.x_test = dset_test.data.numpy().reshape((100, -1))
+        self.y_test = dset_test.label.numpy()
 
     def main(self):
-        print('#' * 100)
-        print('SVM\n')
+        x_train = StandardScaler().fit_transform(self.x_train)
+        x_test = StandardScaler().fit_transform(self.x_test)
+        model_names = ['SVM', 'KNN']
+        models = [SVC(kernel="linear", probability=False, class_weight='balanced'), KNeighborsClassifier(n_neighbors=30)]
 
-        for feature in ['de', 'psd']:
-            for smooth_method in ['movingAve', 'LDS']:
-                for frq_bands in [['delta'], ['theta'], ['alpha'], ['beta'], ['gamma'], ['delta', 'theta', 'alpha', 'beta', 'gamma']]:
-                    print('\nFeature in use: {}\nFrequency bands in use: {} >>>'.format(feature+'_'+smooth_method, str(frq_bands)))
-                    train_accuracies, test_accuracies = [], []
-                    for target_subject in range(1, 16):
-                        print('Target on {}'.format(target_subject))
-                        x_train, y_train, x_test, y_test = self.getDataset(feature, smooth_method, frq_bands, target_subject)
-                        x_train = StandardScaler().fit_transform(x_train)
-                        x_test = StandardScaler().fit_transform(x_test)
-                        model = SVC(kernel="linear", probability=False, class_weight='balanced')
+        for i in range(len(model_names)):
+            model_name = model_names[i]
+            model = models[i]
+            print('=' * 25, 'Model: {}'.format(model_name))
+            start = time.time()
+            model.fit(x_train, self.y_train)
+            end = time.time()
+            dur = end - start
+            print('Train time: {:4d}min {:2d}sec'.format(int(dur // 60), int(dur % 60)))
 
-                        start = time.time()
-                        model.fit(x_train, y_train)
-                        end = time.time()
-                        dur = end - start
-                        print('Train time: {:4d}min {:2d}sec'.format(int(dur // 60), int(dur % 60)))
+            train_pred = model.predict(x_train)
+            test_pred = model.predict(x_test)
+            train_pred_accuracy = accuracy_score(self.y_train, train_pred)
+            test_pred_accuracy = accuracy_score(self.y_test, test_pred)
+            print('train_acc: {}\ntest_acc: {}'.format(train_pred_accuracy, test_pred_accuracy))
 
-                        train_pred = model.predict(x_train)
-                        test_pred = model.predict(x_test)
-                        train_pred_accuracy = accuracy_score(y_train, train_pred)
-                        test_pred_accuracy = accuracy_score(y_test, test_pred)
-                        train_accuracies.append(train_pred_accuracy)
-                        test_accuracies.append(test_pred_accuracy)
-                    
-                    train_acc_ave = torch.tensor(train_accuracies).mean()
-                    train_acc_std = torch.tensor(train_accuracies).std()
-                    test_acc_ave = torch.tensor(test_accuracies).mean()
-                    test_acc_std = torch.tensor(test_accuracies).std()
-                    print('train_acc_ave: {}, train_acc_std: {}\ntest_acc_ave: {}, test_acc_std: {}'.format(train_acc_ave, train_acc_std, test_acc_ave, test_acc_std))
+            f1_train = f1_score(self.y_train, train_pred, average=None)
+            f1_test = f1_score(self.y_test, test_pred, average=None)
+            print('train_f1: {}\ntest_f1: {}'.format(str(f1_train), str(f1_test)))
 
+            train_cm_display = plot_confusion_matrix(model, x_train, self.y_train, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
+            train_cm_display.figure_.suptitle('{}: Train set confusion matrix'.format(model_name))
+            train_cm_display.figure_.savefig('./figs/{}_train_cm.png'.format(model_name))
 
-class KNNTrainApp:
-    def __init__(self):
-        self.dpath = args.datapath
-    
-    def getDataset(self, feature, smooth_method, frq_bands, target_subject):
-        train_dset = SEED_IV(self.dpath, feature, smooth_method, frq_bands, [i for i in range(1, 16) if i != target_subject])
-        test_dset = SEED_IV(self.dpath, feature, smooth_method, frq_bands, [target_subject])
-        return train_dset.data.numpy(), train_dset.emotion_label.numpy(), test_dset.data.numpy(), test_dset.emotion_label.numpy()
-
-    def main(self):
-        print('#' * 100)
-        print('KNN\n')
-
-        for feature in ['de', 'psd']:
-            for smooth_method in ['movingAve', 'LDS']:
-                for frq_bands in [['delta'], ['theta'], ['alpha'], ['beta'], ['gamma'], ['delta', 'theta', 'alpha', 'beta', 'gamma']]:
-                    print('\nFeature in use: {}\nFrequency bands in use: {} >>>'.format(feature+'_'+smooth_method, str(frq_bands)))
-                    train_accuracies, test_accuracies = [], []
-                    for target_subject in range(1, 16):
-                        print('Target on {}'.format(target_subject))
-                        x_train, y_train, x_test, y_test = self.getDataset(feature, smooth_method, frq_bands, target_subject)
-                        x_train = StandardScaler().fit_transform(x_train)
-                        x_test = StandardScaler().fit_transform(x_test)
-                        model = KNeighborsClassifier(n_neighbors=30)
-
-                        start = time.time()
-                        model.fit(x_train, y_train)
-                        end = time.time()
-                        dur = end - start
-                        print('Train time: {:4d}min {:2d}sec'.format(int(dur // 60), int(dur % 60)))
-
-                        train_pred = model.predict(x_train)
-                        test_pred = model.predict(x_test)
-                        train_pred_accuracy = accuracy_score(y_train, train_pred)
-                        test_pred_accuracy = accuracy_score(y_test, test_pred)
-                        train_accuracies.append(train_pred_accuracy)
-                        test_accuracies.append(test_pred_accuracy)
-                    
-                    train_acc_ave = torch.tensor(train_accuracies).mean()
-                    train_acc_std = torch.tensor(train_accuracies).std()
-                    test_acc_ave = torch.tensor(test_accuracies).mean()
-                    test_acc_std = torch.tensor(test_accuracies).std()
-                    print('train_acc_ave: {}, train_acc_std: {}\ntest_acc_ave: {}, test_acc_std: {}'.format(train_acc_ave, train_acc_std, test_acc_ave, test_acc_std))
+            test_cm_display = plot_confusion_matrix(model, x_test, self.y_test, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
+            test_cm_display.figure_.suptitle('{}: Test set confusion matrix'.format(model_name))
+            test_cm_display.figure_.savefig('./figs/{}_test_cm.png'.format(model_name))
 
 
 class DANNTrainApp:
@@ -416,15 +371,30 @@ class LSTMTrainApp:
 
 
 if __name__ == '__main__':
-    if '0' in args.which:
-        SVMTrainApp().main()
-    
-    if '1' in args.which:
-        KNNTrainApp().main()
-    
-    if '2' in args.which:
-        DANNTrainApp().main()
-    
-    if '3' in args.which:
-        LSTMTrainApp().main()
+    for feature in [None, 'psd', 'de']:
+        if not feature == None:
+            print('#'*50, ' Feature: {}'.format(feature))
+            print()
 
+            indices = list(range(900))
+            random.shuffle(indices)
+            train_indices = indices[:800]
+            test_indices = indices[800:]
+            dset_train = ArtDataset(feature=feature, choice=train_indices)
+            dset_test = ArtDataset(feature=feature, choice=test_indices)
+
+            if '0' in args.which:
+                BaselinesTrainApp(dset_train, dset_test).main()
+            
+            if '1' in args.which:
+                pass
+            
+            if '2' in args.which:
+                DANNTrainApp().main()
+            
+            if '3' in args.which:
+                LSTMTrainApp().main()
+        else:
+            for frq in ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']:
+                pass
+            

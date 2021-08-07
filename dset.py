@@ -1,4 +1,5 @@
 import os
+import random
 import torch
 from torch.utils.data import Dataset
 import scipy.io as sio
@@ -6,12 +7,13 @@ import numpy as np
 
 
 class ArtDataset(Dataset):
-    def __init__(self, feature=None, freq_band='all'):
+    def __init__(self, feature=None, freq_band='all', choice=None):
         """Initialize dataset.
 
         Args:
             feature (str): None, 'psd', 'de'
             freq_band (str): 'all', 'delta', 'theta', 'alpha', 'beta', 'gamma'
+            choice (list): Indices to choose
         """
         super().__init__()
         bands = ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']
@@ -28,6 +30,13 @@ class ArtDataset(Dataset):
         
         label_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_label.npy"
         self.label = np.load(label_path)
+
+        if not choice == None:
+            self.data = self.data[choice]
+            self.label = self.label[choice]
+        
+        self.data = torch.from_numpy(self.data).to(torch.float)
+        self.label = torch.from_numpy(self.label).to(torch.long)
     
     def __len__(self):
         return self.data.shape[0]
