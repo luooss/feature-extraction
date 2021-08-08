@@ -20,6 +20,13 @@ from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, plot_confusion_matrix, f1_score
+from sklearn.gaussian_process import GaussianProcessClassifier
+from sklearn.gaussian_process.kernels import RBF
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn.model_selection import KFold
 
 import matplotlib.pyplot as plt
 
@@ -72,46 +79,115 @@ args = parser.parse_args()
 
 
 class BaselinesTrainApp:
-    def __init__(self, dset_train, dset_test):
-        self.x_train = dset_train.data.numpy().reshape((800, -1))
-        self.y_train = dset_train.label.numpy()
+    def __init__(self, feature, freq_band, k_fold):
+        print('#'*50, ' Feature: {}'.format(feature))
+        print('#'*50, ' Freqency Bands: {}'.format(freq_band))
+        print()
 
-        self.x_test = dset_test.data.numpy().reshape((100, -1))
-        self.y_test = dset_test.label.numpy()
+        self.feature = feature
+        self.freq_band = freq_band
+        self.k_fold = k_fold
 
+        self.model_names = ["Nearest Neighbors", "Linear SVM", "RBF SVM", "Gaussian Process",
+                            "Decision Tree", "Random Forest", "AdaBoost", "Naive Bayes", "QDA"]
+        self.models = [KNeighborsClassifier(n_neighbors=30),
+                       SVC(kernel="linear", probability=False, class_weight='balanced', C=0.05),
+                       SVC(gamma=2, C=0.05),
+                       GaussianProcessClassifier(1.0 * RBF(1.0)),
+                       DecisionTreeClassifier(max_depth=5),
+                       RandomForestClassifier(max_depth=5, n_estimators=10, max_features=1),
+                       AdaBoostClassifier(),
+                       GaussianNB(),
+                       QuadraticDiscriminantAnalysis()]
+        self.phase = ['train', 'test']
+        self.indicators = ['acc', 'f1 score']
+    
     def main(self):
-        x_train = StandardScaler().fit_transform(self.x_train)
-        x_test = StandardScaler().fit_transform(self.x_test)
-        model_names = ['SVM', 'KNN']
-        models = [SVC(kernel="linear", probability=False, class_weight='balanced'), KNeighborsClassifier(n_neighbors=30)]
+        self.cross_validation(self.k_fold)
+    
+    def cross_validation(self, k_fold):
+        self.results = {}
+        for model_name in self.model_names:
+            self.results[model_name] = {}
+            for ph in self.phase:
+                self.results[model_name][ph] = {}
+                for ind in self.indicators:
+                    self.results[model_name][ph][ind] = []
 
-        for i in range(len(model_names)):
-            model_name = model_names[i]
-            model = models[i]
-            print('=' * 25, 'Model: {}'.format(model_name))
+        indices = list(range(900))
+        kf = KFold(n_splits=k_fold, shuffle=True)
+        fold = 0
+        for train_indices, test_indices in kf.split(indices):
+            fold += 1
+            print('>>> Fold: {}'.format(fold))
+            dset_train = ArtDataset(feature=self.feature, freq_band=self.freq_band, choice=train_indices.tolist())
+            dset_test = ArtDataset(feature=self.feature, freq_band=self.freq_band, choice=test_indices.tolist())
+
+            x_train = dset_train.data.numpy().reshape((800, -1))
+            y_train = dset_train.label.numpy()
+
+            x_test = dset_test.data.numpy().reshape((100, -1))
+            y_test = dset_test.label.numpy()
+
+            result = self.train(x_train, y_train, x_test, y_test)
+
+            for model_name in self.model_names:
+                for ph in self.phase:
+                    for ind in self.indicators:
+                        self.results[model_name][ph][ind].append(result[model_name][ph][ind])
+            
+        for model_name in self.model_names:
+            print('*'*20, 'Model: {}'.format(model_name))
+            for ph in self.phase:
+                print('='*10, ph)
+                for ind in self.indicators:
+                    arr = np.array(self.results[model_name][ph][ind])
+                    m = arr.mean()
+                    s = arr.std()
+                    print('{},\nmean {:.4f}\nstd {:.4f}'.format(ind, m, s))
+
+    def train(self, x_train, y_train, x_test, y_test):
+        result = {}
+        for model_name in self.model_names:
+            result[model_name] = {}
+            for ph in self.phase:
+                result[model_name][ph] = {}
+
+        x_train = StandardScaler().fit_transform(x_train)
+        x_test = StandardScaler().fit_transform(x_test)
+
+        for model_name, model in zip(self.model_names, self.models):
+            # print('Model: {}'.format(model_name))
             start = time.time()
-            model.fit(x_train, self.y_train)
+            model.fit(x_train, y_train)
             end = time.time()
             dur = end - start
-            print('Train time: {:4d}min {:2d}sec'.format(int(dur // 60), int(dur % 60)))
+            # print('Train time: {:4d}min {:2d}sec'.format(int(dur // 60), int(dur % 60)))
 
             train_pred = model.predict(x_train)
             test_pred = model.predict(x_test)
-            train_pred_accuracy = accuracy_score(self.y_train, train_pred)
-            test_pred_accuracy = accuracy_score(self.y_test, test_pred)
-            print('train_acc: {}\ntest_acc: {}'.format(train_pred_accuracy, test_pred_accuracy))
+            train_pred_accuracy = accuracy_score(y_train, train_pred)
+            test_pred_accuracy = accuracy_score(y_test, test_pred)
+            # print('train_acc: {}\ntest_acc: {}'.format(train_pred_accuracy, test_pred_accuracy))
+            result[model_name]['train']['acc'] = train_pred_accuracy
+            result[model_name]['test']['acc'] = test_pred_accuracy
 
-            f1_train = f1_score(self.y_train, train_pred, average=None)
-            f1_test = f1_score(self.y_test, test_pred, average=None)
-            print('train_f1: {}\ntest_f1: {}'.format(str(f1_train), str(f1_test)))
+            f1_train = f1_score(y_train, train_pred, average='macro')
+            f1_test = f1_score(y_test, test_pred, average='macro')
+            # print('train_f1: {}\ntest_f1: {}'.format(str(f1_train), str(f1_test)))
+            result[model_name]['train']['f1 score'] = f1_train
+            result[model_name]['test']['f1 score'] = f1_test
 
-            train_cm_display = plot_confusion_matrix(model, x_train, self.y_train, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
-            train_cm_display.figure_.suptitle('{}: Train set confusion matrix'.format(model_name))
-            train_cm_display.figure_.savefig('./figs/{}_train_cm.png'.format(model_name))
+            # train_cm_display = plot_confusion_matrix(model, x_train, y_train, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
+            # train_cm_display.figure_.suptitle('{}_{}_{}: Train set confusion matrix'.format(self.feature, self.freq_band, model_name))
+            # train_cm_display.figure_.savefig('./figs/{}_{}_{}_train.png'.format(self.feature, self.freq_band, model_name))
 
-            test_cm_display = plot_confusion_matrix(model, x_test, self.y_test, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
-            test_cm_display.figure_.suptitle('{}: Test set confusion matrix'.format(model_name))
-            test_cm_display.figure_.savefig('./figs/{}_test_cm.png'.format(model_name))
+            # test_cm_display = plot_confusion_matrix(model, x_test, y_test, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
+            # test_cm_display.figure_.suptitle('{}_{}_{}: Test set confusion matrix'.format(self.feature, self.freq_band, model_name))
+            # test_cm_display.figure_.savefig('./figs/{}_{}_{}_test.png'.format(self.feature, self.freq_band, model_name))
+            # plt.close('all')
+        
+        return result
 
 
 class DANNTrainApp:
@@ -373,18 +449,8 @@ class LSTMTrainApp:
 if __name__ == '__main__':
     for feature in [None, 'psd', 'de']:
         if not feature == None:
-            print('#'*50, ' Feature: {}'.format(feature))
-            print()
-
-            indices = list(range(900))
-            random.shuffle(indices)
-            train_indices = indices[:800]
-            test_indices = indices[800:]
-            dset_train = ArtDataset(feature=feature, choice=train_indices)
-            dset_test = ArtDataset(feature=feature, choice=test_indices)
-
             if '0' in args.which:
-                BaselinesTrainApp(dset_train, dset_test).main()
+                BaselinesTrainApp(feature, 'all', 9).main()
             
             if '1' in args.which:
                 pass
