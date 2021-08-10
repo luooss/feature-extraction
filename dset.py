@@ -7,36 +7,34 @@ import numpy as np
 
 
 class ArtDataset(Dataset):
-    def __init__(self, feature=None, freq_band='all', choice=None):
+    def __init__(self, data_paths, label_paths, freq_band='all', choice=None):
         """Initialize dataset.
 
         Args:
-            feature (str): None, 'psd', 'de'
+            data_paths (list of str): Combine multiple data sources
+            label_paths (list of str): Combine labels
             freq_band (str): 'all', 'delta', 'theta', 'alpha', 'beta', 'gamma'
             choice (list): Indices to choose
         """
         super().__init__()
         bands = ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']
-        if feature == None:
-            data_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_data.npy"
-            freq_in_use = bands.index(freq_band)
-            self.data = np.load(data_path)[freq_in_use]
-        elif feature == 'psd':
-            data_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_data_psd.npy"
-            self.data = np.load(data_path)
-        elif feature == 'de':
-            data_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_data_de.npy"
-            self.data = np.load(data_path)
-        
-        label_path = r"D:\bcmi\EMBC\eeg_process\npydata\huatong_label.npy"
-        self.label = np.load(label_path)
+        idx_band = bands.index(freq_band)
 
-        if not choice == None:
-            self.data = self.data[choice]
-            self.label = self.label[choice]
+        self.data = []
+        self.label = []
+        for data_path, label_path in zip(data_paths, label_paths):
+            data_ = np.load(data_path)[idx_band]
+            label_ = np.load(label_path)
+
+            if not choice == None:
+                data_ = data_[choice]
+                label_ = label_[choice]
+            
+            self.data.append(data_)
+            self.label.append(label_)
         
-        self.data = torch.from_numpy(self.data).to(torch.float)
-        self.label = torch.from_numpy(self.label).to(torch.long)
+        self.data = torch.from_numpy(np.concatenate(self.data, axis=0)).to(torch.float)
+        self.label = torch.from_numpy(np.concatenate(self.label, axis=0)).to(torch.long)
     
     def __len__(self):
         return self.data.shape[0]

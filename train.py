@@ -3,6 +3,7 @@ import argparse
 import time
 import random
 from numpy.lib.function_base import average
+import numpy as np
 
 from tqdm import tqdm
 
@@ -37,8 +38,8 @@ from models import *
 parser = argparse.ArgumentParser()
 parser.add_argument('--which',
                     help='Which model to train: 0-SVM, 1-KNN, 2-DANN, 3-LSTM',
-                    default='012',
-                    type=str)
+                    default='0',
+                    type=int)
 parser.add_argument('--datapath',
                     help='The path to your SEED-IV',
                     default='/home/PublicDir/huhaoyi/seed_partition/dataset/seed_iv/eeg',
@@ -78,116 +79,54 @@ parser.add_argument('--num_layers',
 args = parser.parse_args()
 
 
-class BaselinesTrainApp:
-    def __init__(self, feature, freq_band, k_fold):
-        print('#'*50, ' Feature: {}'.format(feature))
-        print('#'*50, ' Freqency Bands: {}'.format(freq_band))
-        print()
-
-        self.feature = feature
-        self.freq_band = freq_band
-        self.k_fold = k_fold
-
-        self.model_names = ["Nearest Neighbors", "Linear SVM", "RBF SVM", "Gaussian Process",
-                            "Decision Tree", "Random Forest", "AdaBoost", "Naive Bayes", "QDA"]
-        self.models = [KNeighborsClassifier(n_neighbors=30),
-                       SVC(kernel="linear", probability=False, class_weight='balanced', C=0.05),
-                       SVC(gamma=2, C=0.05),
-                       GaussianProcessClassifier(1.0 * RBF(1.0)),
-                       DecisionTreeClassifier(max_depth=5),
-                       RandomForestClassifier(max_depth=5, n_estimators=10, max_features=1),
-                       AdaBoostClassifier(),
-                       GaussianNB(),
-                       QuadraticDiscriminantAnalysis()]
-        self.phase = ['train', 'test']
-        self.indicators = ['acc', 'f1 score']
+class SVMTrainApp:
+    def __init__(self, dset_train, dset_test):
+        self.dset_train = dset_train
+        self.dset_test = dset_test
+        self.model = SVC(kernel="linear", probability=False, class_weight='balanced', C=0.05)
     
     def main(self):
-        self.cross_validation(self.k_fold)
-    
-    def cross_validation(self, k_fold):
-        self.results = {}
-        for model_name in self.model_names:
-            self.results[model_name] = {}
-            for ph in self.phase:
-                self.results[model_name][ph] = {}
-                for ind in self.indicators:
-                    self.results[model_name][ph][ind] = []
+        self.result = {}
+        self.result['train'] = {}
+        self.result['test'] = {}
 
-        indices = list(range(900))
-        kf = KFold(n_splits=k_fold, shuffle=True)
-        fold = 0
-        for train_indices, test_indices in kf.split(indices):
-            fold += 1
-            print('>>> Fold: {}'.format(fold))
-            dset_train = ArtDataset(feature=self.feature, freq_band=self.freq_band, choice=train_indices.tolist())
-            dset_test = ArtDataset(feature=self.feature, freq_band=self.freq_band, choice=test_indices.tolist())
+        x_train = self.dset_train.data.numpy().reshape((800, -1))
+        y_train = self.dset_train.label.numpy()
 
-            x_train = dset_train.data.numpy().reshape((800, -1))
-            y_train = dset_train.label.numpy()
-
-            x_test = dset_test.data.numpy().reshape((100, -1))
-            y_test = dset_test.label.numpy()
-
-            result = self.train(x_train, y_train, x_test, y_test)
-
-            for model_name in self.model_names:
-                for ph in self.phase:
-                    for ind in self.indicators:
-                        self.results[model_name][ph][ind].append(result[model_name][ph][ind])
-            
-        for model_name in self.model_names:
-            print('*'*20, 'Model: {}'.format(model_name))
-            for ph in self.phase:
-                print('='*10, ph)
-                for ind in self.indicators:
-                    arr = np.array(self.results[model_name][ph][ind])
-                    m = arr.mean()
-                    s = arr.std()
-                    print('{},\nmean {:.4f}\nstd {:.4f}'.format(ind, m, s))
-
-    def train(self, x_train, y_train, x_test, y_test):
-        result = {}
-        for model_name in self.model_names:
-            result[model_name] = {}
-            for ph in self.phase:
-                result[model_name][ph] = {}
+        x_test = dset_test.data.numpy().reshape((100, -1))
+        y_test = dset_test.label.numpy()
 
         x_train = StandardScaler().fit_transform(x_train)
         x_test = StandardScaler().fit_transform(x_test)
 
-        for model_name, model in zip(self.model_names, self.models):
-            # print('Model: {}'.format(model_name))
-            start = time.time()
-            model.fit(x_train, y_train)
-            end = time.time()
-            dur = end - start
-            # print('Train time: {:4d}min {:2d}sec'.format(int(dur // 60), int(dur % 60)))
+        start = time.time()
+        self.model.fit(x_train, y_train)
+        end = time.time()
+        dur = end - start
+        # print('Train time: {:4d}min {:2d}sec'.format(int(dur // 60), int(dur % 60)))
 
-            train_pred = model.predict(x_train)
-            test_pred = model.predict(x_test)
-            train_pred_accuracy = accuracy_score(y_train, train_pred)
-            test_pred_accuracy = accuracy_score(y_test, test_pred)
-            # print('train_acc: {}\ntest_acc: {}'.format(train_pred_accuracy, test_pred_accuracy))
-            result[model_name]['train']['acc'] = train_pred_accuracy
-            result[model_name]['test']['acc'] = test_pred_accuracy
+        train_pred = self.model.predict(x_train)
+        test_pred = self.model.predict(x_test)
+        train_pred_accuracy = accuracy_score(y_train, train_pred)
+        test_pred_accuracy = accuracy_score(y_test, test_pred)
+        self.result['train']['acc'] = train_pred_accuracy
+        self.result['test']['acc'] = test_pred_accuracy
 
-            f1_train = f1_score(y_train, train_pred, average='macro')
-            f1_test = f1_score(y_test, test_pred, average='macro')
-            # print('train_f1: {}\ntest_f1: {}'.format(str(f1_train), str(f1_test)))
-            result[model_name]['train']['f1 score'] = f1_train
-            result[model_name]['test']['f1 score'] = f1_test
+        f1_train = f1_score(y_train, train_pred, average='macro')
+        f1_test = f1_score(y_test, test_pred, average='macro')
+        self.result['train']['f1'] = f1_train
+        self.result['test']['f1'] = f1_test
 
-            # train_cm_display = plot_confusion_matrix(model, x_train, y_train, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
-            # train_cm_display.figure_.suptitle('{}_{}_{}: Train set confusion matrix'.format(self.feature, self.freq_band, model_name))
-            # train_cm_display.figure_.savefig('./figs/{}_{}_{}_train.png'.format(self.feature, self.freq_band, model_name))
+        # train_cm_display = plot_confusion_matrix(model, x_train, y_train, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
+        # train_cm_display.figure_.suptitle('{}_{}_{}: Train set confusion matrix'.format(self.feature, self.freq_band, model_name))
+        # train_cm_display.figure_.savefig('./figs/{}_{}_{}_train.png'.format(self.feature, self.freq_band, model_name))
 
-            # test_cm_display = plot_confusion_matrix(model, x_test, y_test, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
-            # test_cm_display.figure_.suptitle('{}_{}_{}: Test set confusion matrix'.format(self.feature, self.freq_band, model_name))
-            # test_cm_display.figure_.savefig('./figs/{}_{}_{}_test.png'.format(self.feature, self.freq_band, model_name))
-            # plt.close('all')
+        # test_cm_display = plot_confusion_matrix(model, x_test, y_test, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
+        # test_cm_display.figure_.suptitle('{}_{}_{}: Test set confusion matrix'.format(self.feature, self.freq_band, model_name))
+        # test_cm_display.figure_.savefig('./figs/{}_{}_{}_test.png'.format(self.feature, self.freq_band, model_name))
+        # plt.close('all')
         
-        return result
+        return self.result
 
 
 class DANNTrainApp:
@@ -446,21 +385,108 @@ class LSTMTrainApp:
                     print('Leave-one-out cross validation, mean: {:10.4f}, std: {:10.4f}'.format(cv_acc_mean, cv_acc_std))
 
 
+# control experiments in outter region
+# train app handles fir given data
+
 if __name__ == '__main__':
-    for feature in [None, 'psd', 'de']:
-        if not feature == None:
-            if '0' in args.which:
-                BaselinesTrainApp(feature, 'all', 9).main()
-            
-            if '1' in args.which:
-                pass
-            
-            if '2' in args.which:
-                DANNTrainApp().main()
-            
-            if '3' in args.which:
-                LSTMTrainApp().main()
-        else:
-            for frq in ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']:
-                pass
-            
+    experiments = ['subj_dependent', 'subj_independent']
+    features = ['psd', 'de']
+    freq_bands = ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']
+    subjects = ['chenyi', 'huangwenjing', 'huangxingbao', 'huatong', 'wuwenrui', 'yinhao']
+    phases = ['train', 'test']
+    indicators = ['acc', 'f1']
+    data_dir = r'D:\bcmi\EMBC\eeg_process\npydata'
+
+    for exp in experiments:
+        print('#'*50, 'Experiment: ', exp)
+        for feature in features:
+            print('#'*30, 'Feature: ', feature)
+            for freq in freq_bands:
+                print('#'*20, 'Freq. Band: ', freq)
+                if exp == 'subj_dependent':
+                    model_name = None
+                    subj_dep_result = {}
+                    for subject in subjects:
+                        subj_dep_result[subject] = {}
+                        for ph in phases:
+                            subj_dep_result[subject][ph] = {}
+
+                    for subject in subjects:
+                        print('#'*10, 'Train on ', subject)
+                        data_path = data_dir + '\\' + subject + '_data_' + feature + '.npy'
+                        label_path = data_dir + '\\' + subject + '_label.npy'
+
+                        # cross validation
+                        performance = {}
+                        for ph in phases:
+                            performance[ph] = {}
+                            for id in indicators:
+                                performance[ph][id] = []
+                        
+                        indices = list(range(900))
+                        kf = KFold(n_splits=9, shuffle=True)
+                        fold = 0
+                        for train_indices, test_indices in kf.split(indices):
+                            # prepare data
+                            dset_train = ArtDataset([data_path], [label_path], freq_band=freq, choice=train_indices.tolist())
+                            dset_test = ArtDataset([data_path], [label_path], freq_band=freq, choice=test_indices.tolist())
+                            
+                            if args.which == 0:
+                                model_name = 'SVM'
+                                print('>>> Model: SVM')
+                                result = SVMTrainApp(dset_train, dset_test).main()
+                            elif args.which == 1:
+                                pass
+                            
+                            for ph in phases:
+                                for id in indicators:
+                                    performance[ph][id].append(result[ph][id])
+                        
+                        train_acc_mean = np.array(performance['train']['acc']).mean()
+                        # train_acc_std = np.array(performance['train']['acc']).std()
+                        train_f1_mean = np.array(performance['train']['f1']).mean()
+                        # train_f1_std = np.array(performance['train']['f1']).std()
+
+                        test_acc_mean = np.array(performance['test']['acc']).mean()
+                        # test_acc_std = np.array(performance['test']['acc']).std()
+                        test_f1_mean = np.array(performance['test']['f1']).mean()
+                        # test_f1_std = np.array(performance['test']['f1']).std()
+
+                        subj_dep_result[subject]['train']['acc'] = train_acc_mean
+                        subj_dep_result[subject]['train']['f1'] = train_f1_mean
+                        subj_dep_result[subject]['test']['acc'] = test_acc_mean
+                        subj_dep_result[subject]['test']['f1'] = test_f1_mean
+                        # print('====Train:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(train_acc_mean, train_acc_std, train_f1_mean, train_f1_std))
+                        # print('====Test:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(test_acc_mean, test_acc_std, test_f1_mean, test_f1_std))
+
+                    subj_train_accs = np.array([round(subj_dep_result[subj]['train']['acc'], 4) for subj in subjects])
+                    subj_train_f1s = np.array([round(subj_dep_result[subj]['train']['f1'], 4) for subj in subjects])
+                    subj_test_accs = np.array([round(subj_dep_result[subj]['test']['acc'], 4) for subj in subjects])
+                    subj_test_f1s = np.array([round(subj_dep_result[subj]['test']['f1'], 4) for subj in subjects])
+
+                    plt.style.use('seaborn')
+                    x = np.arange(len(subjects))  # the label locations
+                    width = 0.55  # the width of the bars
+                    fig, ax = plt.subplots()
+                    acc_train_rect = ax.bar(x - width/2, subj_train_accs, width, label='Train/Acc', color='#808080', alpha=0.5)
+                    acc_test_rect = ax.bar(x - width/2, subj_test_accs, width, label='Test/Acc', color='#33ccff')
+                    f1_train_rect = ax.bar(x + width/2, subj_train_f1s, width, label='Train/F1', color='#808080', alpha=0.5)
+                    f1_test_rect = ax.bar(x + width/2, subj_test_f1s, width, label='Test/F1', color='#ffcc99')
+                    # Add some text for labels, title and custom x-axis tick labels, etc.
+                    ax.set_xlabel('Subjects')
+                    ax.set_title('{}_{}_{}_{}'.format(exp, feature, freq, model_name))
+                    ax.set_xticks(x)
+                    ax.set_xticklabels(subjects)
+                    ax.legend()
+                    ax.bar_label(acc_train_rect, padding=3)
+                    ax.bar_label(acc_test_rect, padding=3)
+                    ax.bar_label(f1_train_rect, padding=3)
+                    ax.bar_label(f1_test_rect, padding=3)
+                    fig.savefig('./figs/{}_{}_{}_{}.png'.format(exp, feature, freq, model_name))
+                    plt.close('all')
+
+                    print('====Train:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(subj_train_accs.mean(), subj_train_accs.std(), subj_train_f1s.mean(), subj_train_f1s.std()))
+                    print('====Test:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(subj_test_accs.mean(), subj_test_accs.std(), subj_test_f1s.mean(), subj_test_f1s.std()))
+                elif exp == 'subj_independent':
+                    pass
+
