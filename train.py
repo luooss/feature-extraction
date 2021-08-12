@@ -2,8 +2,10 @@ import os
 import argparse
 import time
 import random
+from pprint import pprint
 from numpy.lib.function_base import average
 import numpy as np
+from torch._C import dtype
 
 from tqdm import tqdm
 
@@ -21,13 +23,8 @@ from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, plot_confusion_matrix, f1_score
-from sklearn.gaussian_process import GaussianProcessClassifier
-from sklearn.gaussian_process.kernels import RBF
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
-from sklearn.model_selection import KFold
+# KFold is not enough, need to make sure the ratio between classes is the same in both train set and test set
+from sklearn.model_selection import GridSearchCV, StratifiedShuffleSplit, PredefinedSplit
 
 import matplotlib.pyplot as plt
 
@@ -78,44 +75,54 @@ parser.add_argument('--num_layers',
 
 args = parser.parse_args()
 
+experiments = ['subj_dependent', 'subj_independent']
+features = ['psd', 'de']
+freq_bands = ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']
+subjects = ['chenyi', 'huangwenjing', 'huangxingbao', 'huatong', 'wuwenrui', 'yinhao']
+phases = ['train', 'test']
+indicators = ['accuracy', 'f1_macro']
+data_dir = r'D:\bcmi\EMBC\eeg_process\npydata'
 
 class SVMTrainApp:
-    def __init__(self, dset_train, dset_test):
-        self.dset_train = dset_train
-        self.dset_test = dset_test
-        self.model = SVC(kernel="linear", probability=False, class_weight='balanced', C=0.05)
+    def __init__(self, dset, split_strategy):
+        """Train classifier.
+
+        Args:
+            dset (torch dataset): the data to be fitted.
+            split_strategy (sklearn split generator): controls the type of experiment.
+        """
+        self.nsamples = dset.data.size()[0]
+        self.data = dset.data.numpy().reshape(self.nsamples, -1)
+        self.label = dset.label.numpy()
+        self.split_strategy = split_strategy
+
+        hyperparams = [{'kernel': ['linear'], 'C': np.logspace(-2, 10, 13)},
+                       {'kernel': ['rbf'], 'C': np.logspace(-2, 10, 13), 'gamma': np.logspace(-9, 3, 13)}]
+        # refit: after hp is determined, learn the best lp over the whole dataset, this is for prediction
+        self.model = GridSearchCV(SVC(),
+                                  param_grid=hyperparams,
+                                  scoring=['accuracy', 'f1_macro'],
+                                  n_jobs=-1,
+                                  refit='f1_macro',
+                                  cv=self.split_strategy,
+                                  return_train_score=True)
     
     def main(self):
-        self.result = {}
-        self.result['train'] = {}
-        self.result['test'] = {}
+        X = StandardScaler().fit_transform(self.data)
+        Y = self.label
+        self.model.fit(X, Y)
+        # pprint(self.model.cv_results_)
+        idx = self.model.best_index_
 
-        x_train = self.dset_train.data.numpy().reshape((800, -1))
-        y_train = self.dset_train.label.numpy()
-
-        x_test = dset_test.data.numpy().reshape((100, -1))
-        y_test = dset_test.label.numpy()
-
-        x_train = StandardScaler().fit_transform(x_train)
-        x_test = StandardScaler().fit_transform(x_test)
-
-        start = time.time()
-        self.model.fit(x_train, y_train)
-        end = time.time()
-        dur = end - start
-        # print('Train time: {:4d}min {:2d}sec'.format(int(dur // 60), int(dur % 60)))
-
-        train_pred = self.model.predict(x_train)
-        test_pred = self.model.predict(x_test)
-        train_pred_accuracy = accuracy_score(y_train, train_pred)
-        test_pred_accuracy = accuracy_score(y_test, test_pred)
-        self.result['train']['acc'] = train_pred_accuracy
-        self.result['test']['acc'] = test_pred_accuracy
-
-        f1_train = f1_score(y_train, train_pred, average='macro')
-        f1_test = f1_score(y_test, test_pred, average='macro')
-        self.result['train']['f1'] = f1_train
-        self.result['test']['f1'] = f1_test
+        result = {}
+        for ph in phases:
+            result[ph] = {}
+            for ind in indicators:
+                result[ph][ind] = {}
+                for nub in ['mean', 'std']:
+                    result[ph][ind][nub] = self.model.cv_results_[nub+'_'+ph+'_'+ind][idx]
+        
+        print('The best hyper parameters: {}'.format(self.model.best_params_))
 
         # train_cm_display = plot_confusion_matrix(model, x_train, y_train, normalize='true', display_labels=['Negative', 'Neutral', 'Positive'], cmap='Blues')
         # train_cm_display.figure_.suptitle('{}_{}_{}: Train set confusion matrix'.format(self.feature, self.freq_band, model_name))
@@ -125,8 +132,9 @@ class SVMTrainApp:
         # test_cm_display.figure_.suptitle('{}_{}_{}: Test set confusion matrix'.format(self.feature, self.freq_band, model_name))
         # test_cm_display.figure_.savefig('./figs/{}_{}_{}_test.png'.format(self.feature, self.freq_band, model_name))
         # plt.close('all')
+
+        return result
         
-        return self.result
 
 
 class DANNTrainApp:
@@ -385,108 +393,89 @@ class LSTMTrainApp:
                     print('Leave-one-out cross validation, mean: {:10.4f}, std: {:10.4f}'.format(cv_acc_mean, cv_acc_std))
 
 
-# control experiments in outter region
-# train app handles fir given data
 
 if __name__ == '__main__':
-    experiments = ['subj_dependent', 'subj_independent']
-    features = ['psd', 'de']
-    freq_bands = ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']
-    subjects = ['chenyi', 'huangwenjing', 'huangxingbao', 'huatong', 'wuwenrui', 'yinhao']
-    phases = ['train', 'test']
-    indicators = ['acc', 'f1']
-    data_dir = r'D:\bcmi\EMBC\eeg_process\npydata'
-
     for exp in experiments:
         print('#'*50, 'Experiment: ', exp)
         for feature in features:
             print('#'*30, 'Feature: ', feature)
             for freq in freq_bands:
                 print('#'*20, 'Freq. Band: ', freq)
-                if exp == 'subj_dependent':
-                    model_name = None
-                    subj_dep_result = {}
-                    for subject in subjects:
-                        subj_dep_result[subject] = {}
-                        for ph in phases:
-                            subj_dep_result[subject][ph] = {}
+                model_name = None
+                exp_result = {}
 
+                if exp == 'subj_dependent':
                     for subject in subjects:
                         print('#'*10, 'Train on ', subject)
+
                         data_path = data_dir + '\\' + subject + '_data_' + feature + '.npy'
                         label_path = data_dir + '\\' + subject + '_label.npy'
-
-                        # cross validation
-                        performance = {}
-                        for ph in phases:
-                            performance[ph] = {}
-                            for id in indicators:
-                                performance[ph][id] = []
+                        dset = ArtDataset([data_path], [label_path], freq_band=freq)
+                        split_strategy = StratifiedShuffleSplit(n_splits=9, test_size=100)
                         
-                        indices = list(range(900))
-                        kf = KFold(n_splits=9, shuffle=True)
-                        fold = 0
-                        for train_indices, test_indices in kf.split(indices):
-                            # prepare data
-                            dset_train = ArtDataset([data_path], [label_path], freq_band=freq, choice=train_indices.tolist())
-                            dset_test = ArtDataset([data_path], [label_path], freq_band=freq, choice=test_indices.tolist())
-                            
-                            if args.which == 0:
-                                model_name = 'SVM'
-                                print('>>> Model: SVM')
-                                result = SVMTrainApp(dset_train, dset_test).main()
-                            elif args.which == 1:
-                                pass
-                            
-                            for ph in phases:
-                                for id in indicators:
-                                    performance[ph][id].append(result[ph][id])
+                        if args.which == 0:
+                            model_name = 'SVM'
+                            print('>>> Model: SVM')
+                            result = SVMTrainApp(dset, split_strategy).main()
+                        elif args.which == 1:
+                            pass
                         
-                        train_acc_mean = np.array(performance['train']['acc']).mean()
-                        # train_acc_std = np.array(performance['train']['acc']).std()
-                        train_f1_mean = np.array(performance['train']['f1']).mean()
-                        # train_f1_std = np.array(performance['train']['f1']).std()
-
-                        test_acc_mean = np.array(performance['test']['acc']).mean()
-                        # test_acc_std = np.array(performance['test']['acc']).std()
-                        test_f1_mean = np.array(performance['test']['f1']).mean()
-                        # test_f1_std = np.array(performance['test']['f1']).std()
-
-                        subj_dep_result[subject]['train']['acc'] = train_acc_mean
-                        subj_dep_result[subject]['train']['f1'] = train_f1_mean
-                        subj_dep_result[subject]['test']['acc'] = test_acc_mean
-                        subj_dep_result[subject]['test']['f1'] = test_f1_mean
-                        # print('====Train:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(train_acc_mean, train_acc_std, train_f1_mean, train_f1_std))
-                        # print('====Test:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(test_acc_mean, test_acc_std, test_f1_mean, test_f1_std))
-
-                    subj_train_accs = np.array([round(subj_dep_result[subj]['train']['acc'], 4) for subj in subjects])
-                    subj_train_f1s = np.array([round(subj_dep_result[subj]['train']['f1'], 4) for subj in subjects])
-                    subj_test_accs = np.array([round(subj_dep_result[subj]['test']['acc'], 4) for subj in subjects])
-                    subj_test_f1s = np.array([round(subj_dep_result[subj]['test']['f1'], 4) for subj in subjects])
-
-                    plt.style.use('seaborn')
-                    x = np.arange(len(subjects))  # the label locations
-                    width = 0.55  # the width of the bars
-                    fig, ax = plt.subplots()
-                    acc_train_rect = ax.bar(x - width/2, subj_train_accs, width, label='Train/Acc', color='#808080', alpha=0.5)
-                    acc_test_rect = ax.bar(x - width/2, subj_test_accs, width, label='Test/Acc', color='#33ccff')
-                    f1_train_rect = ax.bar(x + width/2, subj_train_f1s, width, label='Train/F1', color='#808080', alpha=0.5)
-                    f1_test_rect = ax.bar(x + width/2, subj_test_f1s, width, label='Test/F1', color='#ffcc99')
-                    # Add some text for labels, title and custom x-axis tick labels, etc.
-                    ax.set_xlabel('Subjects')
-                    ax.set_title('{}_{}_{}_{}'.format(exp, feature, freq, model_name))
-                    ax.set_xticks(x)
-                    ax.set_xticklabels(subjects)
-                    ax.legend()
-                    ax.bar_label(acc_train_rect, padding=3)
-                    ax.bar_label(acc_test_rect, padding=3)
-                    ax.bar_label(f1_train_rect, padding=3)
-                    ax.bar_label(f1_test_rect, padding=3)
-                    fig.savefig('./figs/{}_{}_{}_{}.png'.format(exp, feature, freq, model_name))
-                    plt.close('all')
-
-                    print('====Train:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(subj_train_accs.mean(), subj_train_accs.std(), subj_train_f1s.mean(), subj_train_f1s.std()))
-                    print('====Test:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(subj_test_accs.mean(), subj_test_accs.std(), subj_test_f1s.mean(), subj_test_f1s.std()))
+                        exp_result[subject] = result
                 elif exp == 'subj_independent':
-                    pass
+                    data_paths = [data_dir + '\\' + subj + '_data_' + feature + '.npy' for subj in subjects]
+                    label_paths = [data_dir + '\\' + subj + '_label.npy' for subj in subjects]
+                    # (6*900, ...)
+                    dset = ArtDataset(data_paths, label_paths, freq_band=freq)
+                    
+                    for subject in subjects:
+                        print('#'*10, 'Target on ', subject)
+                        subj_idx = subjects.index(subject)
+
+                        test_fold = np.empty(5400, dtype=np.int8)
+                        test_fold.fill(-1)
+                        test_fold[subj_idx*900: (subj_idx+1)*900] = 0
+                        split_strategy = PredefinedSplit(test_fold)
+                        
+                        if args.which == 0:
+                            model_name = 'SVM'
+                            print('>>> Model: SVM')
+                            result = SVMTrainApp(dset, split_strategy).main()
+                        elif args.which == 1:
+                            pass
+                        
+                        exp_result[subject] = result
+
+                print('Result:')
+                pprint(exp_result)
+
+                subj_train_accs = np.array([round(exp_result[subj]['train']['accuracy'], 4) for subj in subjects])
+                subj_train_f1s = np.array([round(exp_result[subj]['train']['f1_macro'], 4) for subj in subjects])
+                subj_test_accs = np.array([round(exp_result[subj]['test']['accuracy'], 4) for subj in subjects])
+                subj_test_f1s = np.array([round(exp_result[subj]['test']['f1_macro'], 4) for subj in subjects])
+
+                plt.style.use('seaborn')
+                x = np.arange(0, (len(subjects)-1)*2.5+1, 2.5)  # the label locations
+                width = 1.0  # the width of the bars
+                fig, ax = plt.subplots(figsize=(8.8, 7.8))
+                acc_train_rect = ax.bar(x - width/2, subj_train_accs, width, label='Train/Acc', fill=False, ls='--')
+                acc_test_rect = ax.bar(x - width/2, subj_test_accs, width, label='Test/Acc')
+                f1_train_rect = ax.bar(x + width/2, subj_train_f1s, width, label='Train/F1', fill=False, ls='--')
+                f1_test_rect = ax.bar(x + width/2, subj_test_f1s, width, label='Test/F1')
+                # Add some text for labels, title and custom x-axis tick labels, etc.
+                ax.set_xlabel('Subjects')
+                ax.set_title('{}_{}_{}_{}'.format(exp, feature, freq, model_name))
+                ax.set_xticks(x)
+                ax.set_xticklabels(subjects)
+                ax.set_ylim(0.0, 1.0)
+                ax.legend([acc_train_rect, acc_test_rect, f1_test_rect], ['Train', 'Test/Acc.', 'Test/F1.'])
+                ax.bar_label(acc_train_rect, padding=3)
+                ax.bar_label(acc_test_rect, padding=3)
+                ax.bar_label(f1_train_rect, padding=3)
+                ax.bar_label(f1_test_rect, padding=3)
+                fig.savefig('./figs/{}_{}_{}_{}.png'.format(exp, feature, freq, model_name))
+                plt.close('all')
+
+                print('====Train:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(subj_train_accs.mean(), subj_train_accs.std(), subj_train_f1s.mean(), subj_train_f1s.std()))
+                print('====Test:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(subj_test_accs.mean(), subj_test_accs.std(), subj_test_f1s.mean(), subj_test_f1s.std()))
+
 

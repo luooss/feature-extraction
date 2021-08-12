@@ -7,14 +7,13 @@ import numpy as np
 
 
 class ArtDataset(Dataset):
-    def __init__(self, data_paths, label_paths, freq_band='all', choice=None):
+    def __init__(self, data_paths, label_paths, freq_band='all'):
         """Initialize dataset.
 
         Args:
             data_paths (list of str): Combine multiple data sources
             label_paths (list of str): Combine labels
             freq_band (str): 'all', 'delta', 'theta', 'alpha', 'beta', 'gamma'
-            choice (list): Indices to choose
         """
         super().__init__()
         bands = ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']
@@ -25,10 +24,6 @@ class ArtDataset(Dataset):
         for data_path, label_path in zip(data_paths, label_paths):
             data_ = np.load(data_path)[idx_band]
             label_ = np.load(label_path)
-
-            if not choice == None:
-                data_ = data_[choice]
-                label_ = label_[choice]
             
             self.data.append(data_)
             self.label.append(label_)
