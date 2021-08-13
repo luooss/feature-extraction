@@ -25,49 +25,43 @@ class GradientReversalLayer(nn.Module):
         return GradientReversalFuntion.apply(x, self.lambda_)
 
 class FeatureExtractor(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self):
         super().__init__()
-        self.fc1 = nn.Linear(input_dim, 128)
-        # self.tanh1 = nn.Tanh()
+        self.bn = nn.BatchNorm2d(62)
+        self.fc1 = nn.Linear(310, 256)
         self.relu1 = nn.ReLU()
         # self.dropout = nn.Dropout()
-        self.fc2 = nn.Linear(128, 128)
-        # self.tanh2 = nn.Tanh()
+        self.fc2 = nn.Linear(256, 128)
 
     def forward(self, x):
-        a = self.relu1(self.fc1(x))
+        a = self.bn(x)
+        a = self.relu1(self.fc1(a))
         a = self.fc2(a)
         return a
 
 
 class EmotionClassifier(nn.Module):
-    def __init__(self, output_dim):
+    def __init__(self):
         super().__init__()
         # if you want to apply additional operations in between layers, wirte them separately
         # or use nn.Sequential()
         self.fc1 = nn.Linear(128, 64)
-        # self.sig1 = nn.Sigmoid()
+        # self.dropout = nn.Dropout()
         self.relu1 = nn.ReLU()
-        self.fc2 = nn.Linear(64, 64)
-        self.relu2 = nn.ReLU()
-        self.dropout = nn.Dropout()
-        # self.sig2 = nn.Sigmoid()
-        self.fc3 = nn.Linear(64, output_dim)
+        self.fc2 = nn.Linear(64, 3)
         self.lsm = nn.LogSoftmax(dim=1)
 
     def forward(self, x):
         a = self.relu1(self.fc1(x))
-        a = self.relu2(self.fc2(a))
-        a = self.dropout(a)
-        a = self.lsm(self.fc3(a))
+        a = self.lsm(self.fc2(a))
         return a
 
 
 class DANN(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self):
         super().__init__()
-        self.feature_extractor = FeatureExtractor(input_dim)
-        self.emotion_classifier = EmotionClassifier(output_dim)
+        self.feature_extractor = FeatureExtractor()
+        self.emotion_classifier = EmotionClassifier()
     
     def forward(self, x):
         a = self.feature_extractor(x)
@@ -80,21 +74,14 @@ class DomainClassifier(nn.Module):
         super().__init__()
         self.gradrev = GradientReversalLayer(lambda_=lambda_)
         self.fc1 = nn.Linear(128, 64)
-        # self.sig1 = nn.Sigmoid()
         self.relu1 = nn.ReLU()
-        self.fc2 = nn.Linear(64, 64)
-        self.relu2 = nn.ReLU()
-        self.dropout = nn.Dropout()
-        # self.sig2 = nn.Sigmoid()
-        self.fc3 = nn.Linear(64, 2)
+        self.fc2 = nn.Linear(64, 2)
         self.lsm = nn.LogSoftmax(dim=1)
 
     def forward(self, x):
         a = self.gradrev(x)
         a = self.relu1(self.fc1(a))
-        a = self.relu2(self.fc2(a))
-        a = self.dropout(a)
-        a = self.lsm(self.fc3(a))
+        a = self.lsm(self.fc2(a))
         return a
 
 

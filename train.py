@@ -6,6 +6,7 @@ from pprint import pprint
 from numpy.lib.function_base import average
 import numpy as np
 from torch._C import dtype
+from torch.functional import split
 
 from tqdm import tqdm
 
@@ -13,7 +14,7 @@ from collections import OrderedDict, namedtuple
 from itertools import product
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, SubsetRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,33 +35,13 @@ from models import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--which',
-                    help='Which model to train: 0-SVM, 1-KNN, 2-DANN, 3-LSTM',
+                    help='Which model to train: 0-SVM, 1-DANN, 2-LSTM',
                     default='0',
                     type=int)
-parser.add_argument('--datapath',
-                    help='The path to your SEED-IV',
-                    default='/home/PublicDir/huhaoyi/seed_partition/dataset/seed_iv/eeg',
-                    type=str)
 parser.add_argument('--maxepochs',
                     help='Maximum training epochs',
                     default=1000,
                     type=int)
-parser.add_argument('--lr',
-                    help='Learning rate',
-                    default='[1e-2]',
-                    type=str)
-
-# SVM hyper-parameters
-
-# DANN hyper-parameters
-parser.add_argument('--lambda_',
-                    help='Lambda',
-                    default='[1.0]',
-                    type=str)
-parser.add_argument('--alpha',
-                    help='Coefficient of total loss',
-                    default='[1.0]',
-                    type=str)
 
 # LSTM hyper-parameters
 parser.add_argument('--hidden_size',
@@ -138,21 +119,20 @@ class SVMTrainApp:
 
 
 class DANNTrainApp:
-    def __init__(self):
-        self.dpath = args.datapath
+    def __init__(self, dset, split_strategy):
+        self.dset = dset
+        self.split_strategy = split_strategy
         self.nworkers = os.cpu_count()
         self.maxepochs = args.maxepochs
-        self.lr = eval(args.lr)
-        self.lambda_ = eval(args.lambda_)
-        self.alpha = eval(args.alpha)
+        self.batch_size = 256
 
         self.use_cuda = torch.cuda.is_available()
         self.device = torch.device('cuda' if self.use_cuda else 'cpu')
     
     def get_runs(self):
-        params = OrderedDict(lr = self.lr,
-                             lambda_ = self.lambda_,
-                             alpha = self.alpha)
+        params = OrderedDict(lr = np.logspace(-5, -1, 5),
+                             lambda_ = np.logspace(-5, 0, 6),
+                             alpha = np.logspace(-5, 0, 6))
         Run = namedtuple('Run', params.keys())
         runs = []
         for v in product(*params.values()):
@@ -160,8 +140,8 @@ class DANNTrainApp:
 
         return runs
 
-    def getModel(self, input_dim, output_dim, lambda_):
-        dann = DANN(input_dim, output_dim)
+    def getModel(self, lambda_):
+        dann = DANN()
         domain_clf = DomainClassifier(lambda_)
         if self.use_cuda:
             print('Using cuda. Total {:d} devices.'.format(torch.cuda.device_count()))
@@ -178,117 +158,113 @@ class DANNTrainApp:
             torch.nn.init.xavier_uniform_(m.weight)
             m.bias.data.fill_(0.01)
 
-    def getDataset(self, feature, smooth_method, frq_bands, target_subject):
-        source_dset = SEED_IV(self.dpath, feature, smooth_method, frq_bands, [i for i in range(1, 16) if i != target_subject], DANN='source')
-        target_dset = SEED_IV(self.dpath, feature, smooth_method, frq_bands, [target_subject], DANN='target')
+    def getDataset(self):
+        assert self.split_strategy.get_n_splits() == 1
+        for train_indices, test_indices in self.split_strategy.split():
+            train_sampler = SubsetRandomSampler(train_indices)
+            test_sampler = SubsetRandomSampler(test_indices)
 
-        self.batch_size = 128
         # if self.use_cuda:
         #     self.batch_size *= torch.cuda.device_count()
 
         # the size of source and target in each batch should be equal, otherwise the model tends to focus on source
-        source_dloader = DataLoader(source_dset, batch_size=self.batch_size // 2, num_workers=self.nworkers, pin_memory=self.use_cuda, shuffle=True)
-        target_dloader = DataLoader(target_dset, batch_size=self.batch_size // 2, num_workers=self.nworkers, pin_memory=self.use_cuda, shuffle=True)
-        return source_dloader, target_dloader, source_dset.data.size()[1]
+        source_dloader = DataLoader(self.dset, batch_size=self.batch_size // 2, num_workers=self.nworkers, pin_memory=self.use_cuda, shuffle=True, sampler=train_sampler)
+        target_dloader = DataLoader(self.dset, batch_size=self.batch_size // 2, num_workers=self.nworkers, pin_memory=self.use_cuda, shuffle=True, sampler=test_sampler)
+        
+        return source_dloader, target_dloader
 
     def main(self):
-        print('#' * 100)
-        print('DANN\n')
-
-        conditions = OrderedDict(features = ['de', 'psd'],
-                                 smooth_methods = ['movingAve', 'LDS'],
-                                 frq_bands = [['delta'], ['theta'], ['alpha'], ['beta'], ['gamma'], ['delta', 'theta', 'alpha', 'beta', 'gamma']])
-        exps = [v for v in conditions.values()]
-        
         runs = self.get_runs()
         for run in runs:
-            for feature, smooth_method, frq_bands in product(*exps):
-                comment = ' DANN lr={} feature={} smooth_method={} frq_bands={} lambda_={} alpha={}'.format(run.lr, feature, smooth_method, str(frq_bands), run.lambda_, run.alpha)
-                dann_writer = SummaryWriter(comment=comment)
+            comment = ' DANN lr={} lambda_={} alpha={}'.format(run.lr, run.lambda_, run.alpha)
+            dann_writer = SummaryWriter(comment=comment)
 
-                print(comment + ' >>>')
-                test_accuracies = []
-                start_outer = time.time()
-                for target_subject in range(1, 16):
-                    print('Target on {}...'.format(target_subject))
-                    source_dloader, target_dloader, input_dim = self.getDataset(feature, smooth_method, frq_bands, target_subject)
-                    nbatches = min(len(source_dloader), len(target_dloader))
+            print('Hyper Parameter test: ' + comment)
+            test_accuracies = []
+            start_outer = time.time()
 
-                    dann, domain_classifier = self.getModel(input_dim, 4, run.lambda_)
-                    # weight initialization
-                    dann.feature_extractor.apply(self.init_weights)
-                    dann.emotion_classifier.apply(self.init_weights)
-                    domain_classifier.apply(self.init_weights)
+            source_dloader, target_dloader, input_dim = self.getDataset()
+            nbatches = min(len(source_dloader), len(target_dloader))
 
-                    # optim = torch.optim.Adam(list(dann.parameters()) + list(domain_classifier.parameters()))
-                    optim = torch.optim.SGD(list(dann.parameters()) + list(domain_classifier.parameters()), lr=run.lr)
-                    
-                    for epoch in tqdm(range(1, self.maxepochs+1)):
-                        loss, emotion_loss, domain_loss = 0, 0, 0
-                        emotion_pred_accuracy, domain_pred_accuracy = 0, 0
+            dann, domain_classifier = self.getModel(run.lambda_)
+            # weight initialization
+            dann.feature_extractor.apply(self.init_weights)
+            dann.emotion_classifier.apply(self.init_weights)
+            domain_classifier.apply(self.init_weights)
 
-                        for (src_data, src_emotion_label, src_domain_label), (tgt_data, _, tgt_domain_label) in zip(source_dloader, target_dloader):
-                            x = torch.cat([src_data, tgt_data], 0).to(self.device)
-                            y_emotion = src_emotion_label.to(self.device)
-                            y_domain = torch.cat([src_domain_label, tgt_domain_label], 0).to(self.device)
+            # optim = torch.optim.Adam(list(dann.parameters()) + list(domain_classifier.parameters()))
+            optim = torch.optim.SGD(list(dann.parameters()) + list(domain_classifier.parameters()), lr=run.lr)
+            
+            for epoch in tqdm(range(1, self.maxepochs+1)):
+                loss, emotion_loss, domain_loss = 0, 0, 0
+                emotion_pred_accuracy, domain_pred_accuracy = 0, 0
 
-                            features = dann.feature_extractor(x)
-                            pred_emotion = dann.emotion_classifier(features[:src_data.shape[0]])
-                            pred_domain = domain_classifier(features)
+                for (src_data, src_emotion_label), (tgt_data, tgt_emotion_label) in zip(source_dloader, target_dloader):
+                    src_domain_label = torch.zeros(src_emotion_label.size()[0]).to(torch.long)
+                    tgt_domain_label = torch.ones(tgt_emotion_label.size()[0]).to(torch.long)
+                    # (256, 62, 1, 5)
+                    # standardization over 62 channels
+                    x = torch.cat([src_data, tgt_data], 0).to(self.device)
+                    y_emotion = src_emotion_label.to(self.device)
+                    y_domain = torch.cat([src_domain_label, tgt_domain_label], 0).to(self.device)
 
-                            # for nn.xxx, need to declare and then use because it is class
-                            # for nn.functional.xxx, use directly
-                            emotion_loss_b = F.nll_loss(pred_emotion, y_emotion)
-                            emotion_loss += emotion_loss_b
-                            domain_loss_b = F.nll_loss(pred_domain, y_domain)
-                            domain_loss += domain_loss_b
-                            loss_b = emotion_loss_b + run.alpha * domain_loss_b
-                            loss += loss_b
+                    features = dann.feature_extractor(x)
+                    pred_emotion = dann.emotion_classifier(features[:src_data.size()[0]])
+                    pred_domain = domain_classifier(features)
 
-                            optim.zero_grad()
-                            loss_b.backward()
-                            optim.step()
+                    # for nn.xxx, need to declare and then use because it is class
+                    # for nn.functional.xxx, use directly
+                    emotion_loss_b = F.nll_loss(pred_emotion, y_emotion)
+                    emotion_loss += emotion_loss_b
+                    domain_loss_b = F.nll_loss(pred_domain, y_domain)
+                    domain_loss += domain_loss_b
+                    loss_b = emotion_loss_b + run.alpha * domain_loss_b
+                    loss += loss_b
 
-                            emotion_pred_accuracy += (pred_emotion.max(dim=1)[1] == y_emotion).float().mean().item()
-                            domain_pred_accuracy += (pred_domain.max(dim=1)[1] == y_domain).float().mean().item()
+                    optim.zero_grad()
+                    loss_b.backward()
+                    optim.step()
 
-                        epa_mean = emotion_pred_accuracy / nbatches  # expected to increase
-                        dpa_mean = domain_pred_accuracy / nbatches  # expected to approximate 50%
+                    emotion_pred_accuracy += (pred_emotion.max(dim=1)[1] == y_emotion).float().mean().item()
+                    domain_pred_accuracy += (pred_domain.max(dim=1)[1] == y_domain).float().mean().item()
 
-                        dann_writer.add_scalar('loss/{}'.format(target_subject), loss, epoch)
-                        dann_writer.add_scalar('emotion_loss/{}'.format(target_subject), emotion_loss, epoch)
-                        dann_writer.add_scalar('domain_loss/{}'.format(target_subject), domain_loss, epoch)
-                        dann_writer.add_scalar('emotion_pred_accuracy/{}'.format(target_subject), epa_mean, epoch)
-                        dann_writer.add_scalar('domain_pred_accuracy/{}'.format(target_subject), dpa_mean, epoch)
-                        dann_writer.flush()
-                        dann_writer.close()
+                epa_mean = emotion_pred_accuracy / nbatches  # expected to increase
+                dpa_mean = domain_pred_accuracy / nbatches  # expected to approximate 50%
 
-                        # if epoch == 1 or epoch % 100 == 0:
-                        #     tqdm.write('Epoch {:6d}: emotion_pred_accuracy {:10.4f}, domain_pred_accuracy {:10.4f}'.format(epoch, epa_mean, dpa_mean))
-                    
-                    # validation
-                    with torch.no_grad():
-                        correct, total = 0, 0
-                        for tx, ty_e, _ in target_dloader:
-                            tx = tx.to(self.device, non_blocking=True)
-                            ty_e = ty_e.to(self.device, non_blocking=True)
+                dann_writer.add_scalar('loss/total_loss', loss, epoch)
+                dann_writer.add_scalar('loss/emotion_loss', emotion_loss, epoch)
+                dann_writer.add_scalar('loss/domain_loss', domain_loss, epoch)
+                dann_writer.add_scalar('accuracy/emotion_pred_accuracy', epa_mean, epoch)
+                dann_writer.add_scalar('accuracy/domain_pred_accuracy', dpa_mean, epoch)
+                dann_writer.flush()
+                dann_writer.close()
 
-                            tpred_e = dann(tx)
+                # if epoch == 1 or epoch % 100 == 0:
+                #     tqdm.write('Epoch {:6d}: emotion_pred_accuracy {:10.4f}, domain_pred_accuracy {:10.4f}'.format(epoch, epa_mean, dpa_mean))
+            
+            # validation
+            with torch.no_grad():
+                correct, total = 0, 0
+                for tx, ty_e in target_dloader:
+                    tx = tx.to(self.device, non_blocking=True)
+                    ty_e = ty_e.to(self.device, non_blocking=True)
 
-                            correct += (tpred_e.max(dim=1)[1] == ty_e).float().sum().item()
-                            total += tx.shape[0]
-                        
-                        acc = correct / total
-                        print('Model subj{:d} transfer prediction accuracy: {:10.4f}'.format(target_subject, acc))
-                        test_accuracies.append(acc)
+                    tpred_e = dann(tx)
+
+                    correct += (tpred_e.max(dim=1)[1] == ty_e).float().sum().item()
+                    total += tx.shape[0]
                 
-                end_outer = time.time()
-                dur_outer = end_outer - start_outer
-                print('Train time: {:4d}min {:2d}sec'.format(int(dur_outer // 60), int(dur_outer % 60)))
+                acc = correct / total
+                print('Model transfer prediction accuracy: {:10.4f}'.format(acc))
+                test_accuracies.append(acc)
+        
+        end_outer = time.time()
+        dur_outer = end_outer - start_outer
+        print('Train time: {:4d}min {:2d}sec'.format(int(dur_outer // 60), int(dur_outer % 60)))
 
-                cv_acc_mean = torch.tensor(test_accuracies).mean().item()
-                cv_acc_std = torch.tensor(test_accuracies).std().item()
-                print('Leave-one-out cross validation, mean: {:10.4f}, std: {:10.4f}'.format(cv_acc_mean, cv_acc_std))
+        cv_acc_mean = torch.tensor(test_accuracies).mean().item()
+        cv_acc_std = torch.tensor(test_accuracies).std().item()
+        print('Leave-one-out cross validation, mean: {:10.4f}, std: {:10.4f}'.format(cv_acc_mean, cv_acc_std))
 
 
 class LSTMTrainApp:
@@ -426,7 +402,7 @@ if __name__ == '__main__':
                     label_paths = [data_dir + '\\' + subj + '_label.npy' for subj in subjects]
                     # (6*900, ...)
                     dset = ArtDataset(data_paths, label_paths, freq_band=freq)
-                    
+
                     for subject in subjects:
                         print('#'*10, 'Target on ', subject)
                         subj_idx = subjects.index(subject)
@@ -448,10 +424,10 @@ if __name__ == '__main__':
                 print('Result:')
                 pprint(exp_result)
 
-                subj_train_accs = np.array([round(exp_result[subj]['train']['accuracy'], 4) for subj in subjects])
-                subj_train_f1s = np.array([round(exp_result[subj]['train']['f1_macro'], 4) for subj in subjects])
-                subj_test_accs = np.array([round(exp_result[subj]['test']['accuracy'], 4) for subj in subjects])
-                subj_test_f1s = np.array([round(exp_result[subj]['test']['f1_macro'], 4) for subj in subjects])
+                subj_train_accs = np.array([round(exp_result[subj]['train']['accuracy']['mean'], 4) for subj in subjects])
+                subj_train_f1s = np.array([round(exp_result[subj]['train']['f1_macro']['mean'], 4) for subj in subjects])
+                subj_test_accs = np.array([round(exp_result[subj]['test']['accuracy']['mean'], 4) for subj in subjects])
+                subj_test_f1s = np.array([round(exp_result[subj]['test']['f1_macro']['mean'], 4) for subj in subjects])
 
                 plt.style.use('seaborn')
                 x = np.arange(0, (len(subjects)-1)*2.5+1, 2.5)  # the label locations
