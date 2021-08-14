@@ -459,7 +459,7 @@ if __name__ == '__main__':
             f1_test_rect = ax.bar(x + width/2, subj_test_f1s, width, label='Test/F1')
             # Add some text for labels, title and custom x-axis tick labels, etc.
             ax.set_xlabel('Subjects')
-            ax.set_title('{}_{}_{}_{}'.format(exp, feature, freq, model_name), pad=36)
+            ax.set_title('{}_{}_{}_{}'.format(args.exp, feature, freq, model_name), pad=36)
             ax.set_xticks(x)
             ax.set_xticklabels(subjects)
             ax.set_ylim(0.0, 1.0)
@@ -470,7 +470,7 @@ if __name__ == '__main__':
             ax.bar_label(acc_test_rect, padding=3)
             ax.bar_label(f1_train_rect, padding=3)
             ax.bar_label(f1_test_rect, padding=3)
-            fig.savefig('./figs/{}_{}_{}_{}.png'.format(exp, feature, freq, model_name))
+            fig.savefig('./figs/{}_{}_{}_{}.png'.format(args.exp, feature, freq, model_name))
             plt.close('all')
 
             print('====Train:\nacc: {:.4f}/{:.4f}\nf1: {:.4f}/{:.4f}'.format(subj_train_accs.mean(), subj_train_accs.std(), subj_train_f1s.mean(), subj_train_f1s.std()))
