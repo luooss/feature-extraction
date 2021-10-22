@@ -67,7 +67,7 @@ freq_bands = ['all', 'delta', 'theta', 'alpha', 'beta', 'gamma']
 subjects = ['chenyi', 'huangwenjing', 'huangxingbao', 'huatong', 'wuwenrui', 'yinhao']
 phases = ['train', 'test']
 indicators = ['accuracy', 'f1_macro']
-data_dir = r'/home/PublicDir/luoshuai/bcmi'
+data_dir = r'D:\bcmi\EMBC\eeg_process\npydata'
 
 class SVMTrainApp:
     def __init__(self, dset, split_strategy):
@@ -82,8 +82,9 @@ class SVMTrainApp:
         self.label = dset.label.numpy()
         self.split_strategy = split_strategy
 
-        hyperparams = [{'kernel': ['linear'], 'C': np.logspace(-2, 10, 13)},
-                       {'kernel': ['rbf'], 'C': np.logspace(-2, 10, 13), 'gamma': np.logspace(-9, 3, 13)}]
+        # hyperparams = [{'kernel': ['linear'], 'C': np.logspace(-2, 10, 13)},
+        #                {'kernel': ['rbf'], 'C': np.logspace(-2, 10, 13), 'gamma': np.logspace(-9, -1, 9)}]
+        hyperparams = [{'kernel': ['rbf'], 'C': [0.01, 1, 100, 10000, 1000000], 'gamma': np.logspace(-5, -1, 5)}]
         # refit: after hp is determined, learn the best lp over the whole dataset, this is for prediction
         self.model = GridSearchCV(SVC(),
                                   param_grid=hyperparams,
@@ -402,8 +403,8 @@ if __name__ == '__main__':
                 for subject in subjects:
                     print('#'*10, 'Train on ', subject)
 
-                    data_path = data_dir + '/' + subject + '_data_' + feature + '.npy'
-                    label_path = data_dir + '/' + subject + '_label.npy'
+                    data_path = data_dir + '\\' + subject + '_data_' + feature + '.npy'
+                    label_path = data_dir + '\\' + subject + '_label.npy'
                     dset = ArtDataset([data_path], [label_path], freq_band=freq)
                     split_strategy = StratifiedShuffleSplit(n_splits=9, test_size=100)
                     
@@ -416,8 +417,8 @@ if __name__ == '__main__':
                     
                     exp_result[subject] = result
             elif args.exp == 'subj_indep':
-                data_paths = [data_dir + '/' + subj + '_data_' + feature + '.npy' for subj in subjects]
-                label_paths = [data_dir + '/' + subj + '_label.npy' for subj in subjects]
+                data_paths = [data_dir + '\\' + subj + '_data_' + feature + '.npy' for subj in subjects]
+                label_paths = [data_dir + '\\' + subj + '_label.npy' for subj in subjects]
                 # (6*900, ...)
                 dset = ArtDataset(data_paths, label_paths, freq_band=freq)
 

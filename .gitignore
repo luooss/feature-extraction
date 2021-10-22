@@ -4,3 +4,10 @@ artwork_exp_record/
 example_pics/
 npydata/
 __pycache__/
+data_embc/
+epochs_image/
+icons/
+npydata_ff/
+npydata_new/
+npydata_withoutproc/
+spectrogram/
